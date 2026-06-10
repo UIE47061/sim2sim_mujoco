@@ -1,9 +1,10 @@
 # 
-policy_path: "/Users/uie47061/Documents/UROP/sim2sim_mujoco/pre_train/policy.pt"
+# policy_path: "/Users/uie47061/Documents/UROP/sim2sim_mujoco/pre_train/model_9999.pt"
+policy_path: "/Users/uie47061/Documents/UROP/sim2sim_mujoco/pre_train_robolab/model_2400.pt"
 xml_path: "/Users/uie47061/Documents/UROP/sim2sim_mujoco/xml/scene.xml"
 
 # Total simulation time
-simulation_duration: 360.0
+simulation_duration: 100000.0
 # Simulation time step
 simulation_dt: 0.005
 # Controller update frequency (meets the requirement of simulation_dt * controll_decimation=0.02; 50Hz)
