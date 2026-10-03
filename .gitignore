@@ -1,39 +1,17 @@
-# Python
+# Python and local tools
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
+.venv/
+.ruff_cache/
+.pytest_cache/
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Environment files
+# Editor and system files
 .DS_Store
-
-# PyTorch
-# *.pt
-*.pth
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# VS Code / IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Output & Logs
-*.log
-out.txt
+# Runtime output
 output/
-logs/
-
-test_*.py
-patch_keyboard.py
+*.log

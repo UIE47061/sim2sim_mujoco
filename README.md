@@ -1,45 +1,54 @@
-# MuJoCo Sim2Sim 四足機器人 (小白)
+# Little White V3：MJLab → MuJoCo sim2sim
 
-此儲存庫包含使用 MuJoCo 在模擬四足機器人上執行已訓練的深度強化學習 (DRL) 策略的部署程式碼。它被設計作為一個「Sim2Sim」的驗證橋樑——在部署到實際硬體之前，於 MuJoCo 這種高精度的物理模擬器中測試通常在 Isaac Gym 或 Isaac Lab 訓練好的策略。
+目前的執行流程為 **MJLab → MuJoCo**：載入 MJLab 匯出的 TorchScript 平地行走策略，透過 PD 控制器驅動 Little White V3 的 12 個關節。執行入口為 `mujoco_mjlab.py`。
 
-## 功能特色
-- **支援 DWAQ 策略**：整合了 `ActorCritic_DWAQ`，透過觀察歷史緩衝區來評估上下文編碼器 (V-VAE)。
-- **多進程鍵盤控制器**：透過在獨立的衍生進程上執行 `pygame` 介面來發布使用者移動指令 (`W/A/S/D/Q/E`)，以避開 macOS 的 UI 阻塞問題，同時保持 MuJoCo 渲染執行緒暢通。
-- **自動對應 (Auto-Mapping)**：開箱即用，將 Isaac Gym (策略定義) 輸出的關節序列與任意 URDF/XML 馬達描述進行無縫對應，解決順序不一致的問題。
+舊版 DWAQ 程式已移除，以下指令與設定皆適用於目前的 MJLab 流程。
 
-## 專案架構
-```text
-.
-├── config/                  # YAML 設定檔 (例如 little_white.yaml)
-├── meshes/                  # 視覺與碰撞網格 (Mesh) 幾何檔
-├── pre_train/               # PyTorch 模型權重檔目錄 (例如 policy.pt)
-├── urdf/                    # 原始 URDF 描述檔
-├── xml/                     # 編譯後的 MuJoCo .xml 場景與機器人描述檔
-├── keyboard_controller.py   # 用於監聽 WASD/QE 輸入的多進程控制器
-└── mujoco_dwaq.py           # 核心的主評估迴圈
-```
+## 安裝與執行
 
-## 依賴套件
-- `mujoco`
-- `torch`
-- `numpy`
-- `pygame`
-- `pyyaml`
-- `matplotlib`
-
-*注意：在 macOS 上，執行 `mujoco.viewer` 需要使用特定的別名執行檔 `mjpython`，而不是標準的 `python`。*
-
-## 執行方式
-透過 YAML 設定檔執行策略，例如 `little_white.yaml` 的配置：
+已有 `.venv` 可直接執行：
 
 ```bash
-# macOS 使用者「必須」使用 mjpython 而不是標準的 python
-mjpython mujoco_dwaq.py config/little_white.yaml
+cd /home/uie/U1_ws/sim2sim_mujoco
+.venv/bin/python mujoco_mjlab.py config/little_white_v3_mjlab.yaml
 ```
 
-**控制方式**：
-- `W / S`：前進 / 後退 (vx)
-- `A / D`：向左移動 / 向右移動 (vy)
-- `Q / E`：向左旋轉 / 向右旋轉 (yaw)
+新環境需先安裝依賴：
 
-請確保目前啟用的終端機視窗沒有阻擋 Pygame 接收輸入；在移動機器人時，只需點選彈出的 Pygame 視窗即可操作。
+```bash
+python3 -m venv .venv
+.venv/bin/pip install mujoco torch numpy pygame pyyaml
+```
+
+## 操作
+
+點選 Pygame 鍵盤控制視窗後操作：
+
+| 按鍵 | 動作 |
+| --- | --- |
+| W / S | 前進 / 後退 |
+| A / D | 左右平移 |
+| Q / E | 左右旋轉 |
+
+預設執行 60 秒，可用 `--duration 300` 調整。關閉 MuJoCo 視窗或按 Ctrl+C 結束；傾斜超過 70 度時停止。
+
+無視窗測試：
+
+```bash
+.venv/bin/python mujoco_mjlab.py config/little_white_v3_mjlab.yaml \
+  --headless --duration 10 --command 0.3 0 0
+```
+
+`--command` 依序是前後速度、左右速度（m/s）及旋轉速度（rad/s），指定後停用鍵盤控制。
+
+## 主要檔案
+
+- `mujoco_mjlab.py`：策略推論與模擬控制。
+- `keyboard_controller.py`：鍵盤控制視窗。
+- `config/little_white_v3_mjlab.yaml`：路徑、站姿、PD 與關節順序等參數。
+- `assets/little_white_v3/`：機器人模型、場景與 mesh。
+- `pre_train_mjlab/flat_9999/policy.pt`：匯出的策略，已包含觀測正規化；部署只需這個權重檔。
+
+目前使用 48 維觀測、12 維動作，策略更新 50 Hz、物理模擬 200 Hz。更換策略時需確認觀測格式與關節順序符合訓練設定。
+
+執行報告預設儲存在 `output/mjlab_report.json`。
