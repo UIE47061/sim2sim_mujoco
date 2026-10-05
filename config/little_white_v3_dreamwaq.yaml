@@ -1,15 +1,15 @@
-# MJLab Flat / 2026-08-30_10-10-22 / model_19998.pt
-policy_path: pre_train_mjlab/blind_stairs_19998/policy.pt
+# DreamWaQ task v2, rough_round best at 9000 updates.
+policy_type: dreamwaq
+policy_path: pre_train_mjlab/dreamwaq_rough_best/policy.pt
 xml_path: assets/little_white_v3/scene.xml
 simulation_duration: 60.0
 simulation_dt: 0.005
 control_decimation: 4
-initial_height: 0.28
+initial_height: 0.31
 kps: [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20]
 kds: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
 torque_limit: 27.0
 action_scale: 0.25
-# Natural joint/action order in the MJLab training asset.
 joint_order:
   - FR_hip_joint
   - FR_thigh_joint
@@ -24,9 +24,12 @@ joint_order:
   - RR_thigh_joint
   - RR_calf_joint
 default_angles: [0, 0.95, -1.7, 0, 0.95, -1.7, 0, 0.95, -1.7, 0, 0.95, -1.7]
-num_obs: 48
+num_obs: 45
 num_actions: 12
 cmd_init: [0.0, 0.0, 0.0]
-# Concatenation: lin_vel_b, ang_vel_b, gravity_b, q-default, dq, last_action, command.
-# Frozen observation normalization is embedded in policy.pt.
-# This training run uses no action delay or target smoothing.
+keyboard:
+  vx_scale: 0.6
+  vy_scale: 0.4
+  yaw_scale: 0.8
+# Input: [batch, 6, 45], oldest frame first. No measured linear velocity.
+# CENet, actor, and normalization are embedded in policy.pt.

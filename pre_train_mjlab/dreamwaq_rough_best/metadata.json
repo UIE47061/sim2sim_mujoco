@@ -1,0 +1,64 @@
+{
+  "version": 2,
+  "task_version": 2,
+  "checkpoint": "logs/2026-10-04_22-52-48_rough_round/best.pt",
+  "input_shape": [
+    "batch",
+    6,
+    45
+  ],
+  "output_shape": [
+    "batch",
+    12
+  ],
+  "observation_order": [
+    "angular_velocity",
+    "projected_gravity",
+    "command",
+    "joint_position_relative",
+    "joint_velocity",
+    "last_action"
+  ],
+  "command_frame": "body_yaw_velocity",
+  "history_order": "oldest_to_newest",
+  "history_reset": "repeat_first_observation",
+  "normalization": "embedded",
+  "joint_order": [
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint"
+  ],
+  "default_angles": [
+    0.0,
+    0.95,
+    -1.7,
+    0.0,
+    0.95,
+    -1.7,
+    0.0,
+    0.95,
+    -1.7,
+    0.0,
+    0.95,
+    -1.7
+  ],
+  "kp": 20.0,
+  "kd": 0.5,
+  "torque_limit": 27.0,
+  "action_scale": 0.25,
+  "physics_dt": 0.005,
+  "control_decimation": 4,
+  "control_hz": 50.0,
+  "physics_hz": 200.0,
+  "model_source_url": "https://github.com/morrisx28/csl_mujoco/tree/0ab74ef5d6048345db7a541316019100416b57d6/unitree_robots/little_white_v3",
+  "model_source_commit": "0ab74ef5d6048345db7a541316019100416b57d6"
+}

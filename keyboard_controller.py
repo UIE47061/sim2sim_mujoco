@@ -35,11 +35,11 @@ def pygame_worker(q, vx_scale, vy_scale, yaw_scale):
         keys = pygame.key.get_pressed()
         target_vx, target_vy, target_yaw = 0.0, 0.0, 0.0
 
-        if keys[pygame.K_w]: target_vx = 1.0
-        elif keys[pygame.K_s]: target_vx = -1.0
+        if keys[pygame.K_w]: target_vx = vx_scale
+        elif keys[pygame.K_s]: target_vx = -vx_scale
         
-        if keys[pygame.K_a]: target_vy = 1.0
-        elif keys[pygame.K_d]: target_vy = -1.0
+        if keys[pygame.K_a]: target_vy = vy_scale
+        elif keys[pygame.K_d]: target_vy = -vy_scale
         
         if keys[pygame.K_q]: target_yaw = yaw_scale
         elif keys[pygame.K_e]: target_yaw = -yaw_scale

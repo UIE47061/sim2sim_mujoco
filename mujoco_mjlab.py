@@ -1,4 +1,4 @@
-"""Run an exported MJLab flat walking policy in standalone MuJoCo."""
+"""Run exported MJLab or DreamWaQ policies in standalone MuJoCo."""
 
 import argparse
 import json
@@ -18,8 +18,31 @@ ROOT = Path(__file__).resolve().parent
 class MjlabSim2Sim:
     def __init__(self, config):
         self.config = config
-        self.model = mujoco.MjModel.from_xml_path(str(ROOT / config["xml_path"]))
+        self.dreamwaq = config.get("policy_type", "mjlab") == "dreamwaq"
+        if config.get("policy_type", "mjlab") not in ("mjlab", "dreamwaq"):
+            raise ValueError("policy_type must be mjlab or dreamwaq")
+        if self.dreamwaq:
+            self.validate_dreamwaq_metadata()
+            spec = mujoco.MjSpec.from_file(str(ROOT / config["xml_path"]))
+            self.apply_dreamwaq_contacts(spec)
+            self.model = spec.compile()
+        else:
+            self.model = mujoco.MjModel.from_xml_path(str(ROOT / config["xml_path"]))
         self.model.opt.timestep = config["simulation_dt"]
+        if self.dreamwaq:
+            self.model.opt.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
+            self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+            self.model.opt.solver = mujoco.mjtSolver.mjSOL_NEWTON
+            for name, value in {
+                "impratio": 10.0,
+                "iterations": 10,
+                "tolerance": 1e-8,
+                "ls_iterations": 20,
+                "ls_tolerance": 0.01,
+                "ccd_iterations": 50,
+            }.items():
+                if hasattr(self.model.opt, name):
+                    setattr(self.model.opt, name, value)
         self.data = mujoco.MjData(self.model)
         self.policy = torch.jit.load(
             str(ROOT / config["policy_path"]), map_location="cpu"
@@ -29,6 +52,7 @@ class MjlabSim2Sim:
             raise ValueError("Expected 12 unique actuated joints")
         self.qadr = self.model.jnt_qposadr[joint_ids]
         self.vadr = self.model.jnt_dofadr[joint_ids]
+        self.joint_ranges = self.model.jnt_range[joint_ids]
         self.mapping = np.array(
             [joint_ids.index(int(j)) for j in self.model.actuator_trnid[:, 0]]
         )
@@ -39,6 +63,8 @@ class MjlabSim2Sim:
             raise ValueError("Joint parameters must contain 12 entries")
         self.base_id = self.model.body("base_link").id
         self.action = np.zeros(12, dtype=np.float32)
+        self.history = None
+        self.illegal_contact = False
         self.data.qpos[2] = config["initial_height"]
         self.data.qpos[self.qadr] = self.default
         mujoco.mj_forward(self.model, self.data)
@@ -46,11 +72,103 @@ class MjlabSim2Sim:
         self.max_torque = 0.0
         self.min_height = self.data.qpos[2]
         self.initial_position = self.data.qpos[:3].copy()
-        print("[INFO] MJLab flat actor loaded; obs=48, action=12", flush=True)
+        label = (
+            "DreamWaQ actor loaded; history=[1,6,45]"
+            if self.dreamwaq
+            else "MJLab flat actor loaded; obs=48"
+        )
+        print(f"[INFO] {label}, action=12", flush=True)
         print("[INFO] policy -> actuator mapping:", self.mapping.tolist(), flush=True)
+
+    def apply_dreamwaq_contacts(self, spec):
+        """Apply the training robot's contact profile to the shared scene.
+
+        scene.xml also serves legacy policies. Its included robot inherits a
+        1 mm margin and 1D foot contacts with friction 0.4; DreamWaQ was trained
+        with zero margin, 3D foot contacts, friction 1, and self collisions.
+        Apply before compilation so MuJoCo also builds the body collision masks
+        and bounding volumes from these settings.
+        """
+        for body in spec.bodies:
+            for geom in body.geoms:
+                if body.name == spec.worldbody.name:
+                    # Terrain shares the robot's XML defaults unless overridden.
+                    if geom.contype or geom.conaffinity:
+                        geom.margin = 0.0
+                    continue
+                geom.margin = 0.0
+                if geom.group != 3:
+                    continue
+                geom.contype = 1
+                geom.conaffinity = 1
+                geom.condim = 1
+                geom.solref = (0.01, 1.0)
+                if geom.name.endswith("_Foot_collision"):
+                    geom.condim = 3
+                    geom.friction = (1.0, 0.005, 0.0005)
+                    geom.priority = 1
+        print(
+            "[INFO] DreamWaQ training contact settings applied to shared scene",
+            flush=True,
+        )
+
+    def validate_dreamwaq_metadata(self):
+        metadata_path = (ROOT / self.config["policy_path"]).with_name("metadata.json")
+        metadata = json.loads(metadata_path.read_text())
+        expected = {
+            "task_version": 2,
+            "input_shape": ["batch", 6, 45],
+            "output_shape": ["batch", 12],
+            "command_frame": "body_yaw_velocity",
+            "history_order": "oldest_to_newest",
+            "history_reset": "repeat_first_observation",
+            "normalization": "embedded",
+            "observation_order": [
+                "angular_velocity",
+                "projected_gravity",
+                "command",
+                "joint_position_relative",
+                "joint_velocity",
+                "last_action",
+            ],
+            "joint_order": self.config["joint_order"],
+        }
+        for name, value in expected.items():
+            if metadata.get(name) != value:
+                raise ValueError(f"Incompatible DreamWaQ metadata: {name}")
+        if self.config["num_obs"] != 45 or self.config["num_actions"] != 12:
+            raise ValueError("DreamWaQ requires 45 observations and 12 actions")
+        pairs = {
+            "default_angles": "default_angles",
+            "kps": "kp",
+            "kds": "kd",
+            "simulation_dt": "physics_dt",
+            "control_decimation": "control_decimation",
+            "torque_limit": "torque_limit",
+            "action_scale": "action_scale",
+        }
+        for config_key, metadata_key in pairs.items():
+            if not np.allclose(
+                self.config[config_key], metadata[metadata_key], rtol=0, atol=1e-8
+            ):
+                raise ValueError(f"DreamWaQ config must match metadata: {config_key}")
 
     def observation(self, command):
         rotation = self.data.xmat[self.base_id].reshape(3, 3)
+        if self.dreamwaq:
+            obs = np.concatenate(
+                (
+                    rotation.T @ self.data.sensor("frame_ang_vel").data,
+                    rotation.T @ np.array([0.0, 0.0, -1.0]),
+                    command,
+                    self.data.qpos[self.qadr] - self.default,
+                    self.data.qvel[self.vadr],
+                    self.action,
+                )
+            ).astype(np.float32)
+            if obs.shape != (45,) or not np.isfinite(obs).all():
+                raise RuntimeError("Invalid DreamWaQ observation")
+            return obs
         velocity = rotation.T @ self.data.sensor("frame_vel").data
         omega = self.data.sensor("imu_gyro").data.copy()
         gravity = rotation.T @ np.array([0.0, 0.0, -1.0])
@@ -71,13 +189,26 @@ class MjlabSim2Sim:
 
     def advance(self, command):
         obs = self.observation(command)
+        if self.dreamwaq:
+            if self.history is None:
+                self.history = np.repeat(obs[None], 6, axis=0)
+            else:
+                self.history = np.concatenate((self.history[1:], obs[None]), axis=0)
+            policy_input = self.history
+        else:
+            policy_input = obs
         with torch.inference_mode():
             self.action = (
-                self.policy(torch.from_numpy(obs).unsqueeze(0)).squeeze(0).numpy()
+                self.policy(torch.from_numpy(policy_input).unsqueeze(0))
+                .squeeze(0)
+                .numpy()
             )
         if self.action.shape != (12,) or not np.isfinite(self.action).all():
             raise RuntimeError("Invalid actor output")
         target = self.default + self.config["action_scale"] * self.action
+        if self.dreamwaq:
+            target = np.clip(target, self.joint_ranges[:, 0], self.joint_ranges[:, 1])
+        self.illegal_contact = False
         for _ in range(self.config["control_decimation"]):
             torque = (
                 self.kps * (target - self.data.qpos[self.qadr])
@@ -89,6 +220,17 @@ class MjlabSim2Sim:
             self.data.ctrl[:] = torque[self.mapping]
             self.max_torque = max(self.max_torque, float(np.abs(torque).max()))
             mujoco.mj_step(self.model, self.data)
+            if self.dreamwaq:
+                for index, contact in enumerate(self.data.contact):
+                    geoms = (int(contact.geom1), int(contact.geom2))
+                    ground = any(self.model.geom_bodyid[g] == 0 for g in geoms)
+                    trunk = any(
+                        self.model.geom(g).name == "base_link_collision" for g in geoms
+                    )
+                    if ground and trunk:
+                        force = np.zeros(6)
+                        mujoco.mj_contactForce(self.model, self.data, index, force)
+                        self.illegal_contact |= bool(np.linalg.norm(force[:3]) > 1.0)
         mujoco.mj_forward(self.model, self.data)
         if (
             not np.isfinite(self.data.qpos).all()
@@ -97,7 +239,7 @@ class MjlabSim2Sim:
             raise RuntimeError("Nonfinite physics state")
         self.min_height = min(self.min_height, self.data.qpos[2])
         upright_cos = self.data.xmat[self.base_id].reshape(3, 3)[2, 2]
-        return obs, upright_cos < np.cos(np.deg2rad(70))
+        return obs, upright_cos < np.cos(np.deg2rad(70)) or self.illegal_contact
 
 
 def main():
@@ -112,9 +254,7 @@ def main():
         metavar=("VX", "VY", "YAW"),
         help="Fixed command; disables keyboard",
     )
-    parser.add_argument(
-        "--report", type=Path, default=ROOT / "output/mjlab_report.json"
-    )
+    parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config_file).read_text())
     duration = (
@@ -132,7 +272,7 @@ def main():
         os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
         from keyboard_controller import KeyboardController
 
-        keyboard = KeyboardController()
+        keyboard = KeyboardController(**config.get("keyboard", {}))
     reason = "duration"
 
     def run(viewer=None):
@@ -173,7 +313,9 @@ def main():
             keyboard.p.join(timeout=2)
             keyboard.q.close()
         report = {
-            "task": "Mjlab-Velocity-Flat-LittleWhiteV3",
+            "task": "DreamWaQ-Flat-LittleWhiteV3"
+            if sim.dreamwaq
+            else "Mjlab-Velocity-Flat-LittleWhiteV3",
             "policy": config["policy_path"],
             "model": config["xml_path"],
             "simulated_seconds": round(sim.data.time, 4),
@@ -183,8 +325,11 @@ def main():
             "min_base_height_m": float(sim.min_height),
             "max_abs_torque_nm": sim.max_torque,
         }
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2) + "\n")
+        report_path = args.report or ROOT / "output" / (
+            "dreamwaq_report.json" if sim.dreamwaq else "mjlab_report.json"
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, indent=2), flush=True)
 
 
