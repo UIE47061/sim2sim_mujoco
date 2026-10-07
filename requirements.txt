@@ -1,0 +1,6 @@
+# Versions used by the verified Python 3.12 standalone environment.
+mujoco==3.2.7
+torch==2.14.1
+numpy==2.5.3
+pygame==2.6.1
+PyYAML==6.0.3

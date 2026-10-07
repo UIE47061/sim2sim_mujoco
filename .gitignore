@@ -4,6 +4,13 @@ __pycache__/
 .venv/
 .ruff_cache/
 .pytest_cache/
+venv/
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Editor and system files
 .DS_Store
@@ -11,7 +18,23 @@ __pycache__/
 .idea/
 *.swp
 *.swo
+.env
+.env.*
+!.env.example
+/docs/
+/tests/
 
 # Runtime output
 output/
+outputs/
+logs/
+videos/
 *.log
+MUJOCO_LOG.TXT
+*.mp4
+
+# Local policy weights; keep metadata and provenance in Git
+*.pt
+*.pth
+*.ckpt
+*.onnx

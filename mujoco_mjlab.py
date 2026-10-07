@@ -1,4 +1,4 @@
-"""Run exported MJLab or DreamWaQ policies in standalone MuJoCo."""
+"""Run exported MJLab, DreamWaQ or WTW policies in standalone MuJoCo."""
 
 import argparse
 import json
@@ -17,14 +17,27 @@ ROOT = Path(__file__).resolve().parent
 
 class MjlabSim2Sim:
     def __init__(self, config):
+        if any(key in config for key in ("terrain", "step_height", "step_width")):
+            raise ValueError("Terrain generation settings are no longer supported; use xml_path.")
         self.config = config
         self.dreamwaq = config.get("policy_type", "mjlab") == "dreamwaq"
-        if config.get("policy_type", "mjlab") not in ("mjlab", "dreamwaq"):
-            raise ValueError("policy_type must be mjlab or dreamwaq")
+        self.wtw = config.get("policy_type", "mjlab") == "wtw"
+        if config.get("policy_type", "mjlab") not in ("mjlab", "dreamwaq", "wtw"):
+            raise ValueError("policy_type must be mjlab, dreamwaq or wtw")
+        if self.wtw:
+            from wtw_runtime import WTWState
+
+            self.wtw_state = WTWState(config, ROOT)
         if self.dreamwaq:
             self.validate_dreamwaq_metadata()
             spec = mujoco.MjSpec.from_file(str(ROOT / config["xml_path"]))
             self.apply_dreamwaq_contacts(spec)
+            self.model = spec.compile()
+        elif self.wtw and config.get("show_grid", True):
+            from wtw_runtime import apply_grid_visuals
+
+            spec = mujoco.MjSpec.from_file(str(ROOT / config["xml_path"]))
+            apply_grid_visuals(spec)
             self.model = spec.compile()
         else:
             self.model = mujoco.MjModel.from_xml_path(str(ROOT / config["xml_path"]))
@@ -56,6 +69,8 @@ class MjlabSim2Sim:
         self.mapping = np.array(
             [joint_ids.index(int(j)) for j in self.model.actuator_trnid[:, 0]]
         )
+        if sorted(self.mapping.tolist()) != list(range(12)):
+            raise ValueError("Expected exactly one actuator per policy joint")
         self.default = np.asarray(config["default_angles"], dtype=float)
         self.kps = np.asarray(config["kps"], dtype=float)
         self.kds = np.asarray(config["kds"], dtype=float)
@@ -72,7 +87,7 @@ class MjlabSim2Sim:
         self.max_torque = 0.0
         self.min_height = self.data.qpos[2]
         self.initial_position = self.data.qpos[:3].copy()
-        label = (
+        label = "WTW student loaded; obs=70, history=[1,2100]" if self.wtw else (
             "DreamWaQ actor loaded; history=[1,6,45]"
             if self.dreamwaq
             else "MJLab flat actor loaded; obs=48"
@@ -95,6 +110,10 @@ class MjlabSim2Sim:
                     # Terrain shares the robot's XML defaults unless overridden.
                     if geom.contype or geom.conaffinity:
                         geom.margin = 0.0
+                        geom.contype = 1
+                        geom.conaffinity = 0
+                        geom.condim = 3
+                        geom.friction = (1.0, 0.005, 0.0005)
                     continue
                 geom.margin = 0.0
                 if geom.group != 3:
@@ -155,6 +174,11 @@ class MjlabSim2Sim:
 
     def observation(self, command):
         rotation = self.data.xmat[self.base_id].reshape(3, 3)
+        if self.wtw:
+            return self.wtw_state.observation(
+                rotation, self.data.qpos[self.qadr], self.data.qvel[self.vadr],
+                self.action, self.wtw_state.command(command),
+            )
         if self.dreamwaq:
             obs = np.concatenate(
                 (
@@ -188,8 +212,15 @@ class MjlabSim2Sim:
         return obs
 
     def advance(self, command):
+        if self.wtw:
+            command = self.wtw_state.command(command)
         obs = self.observation(command)
-        if self.dreamwaq:
+        if self.wtw:
+            if self.wtw_state.history is None:
+                self.wtw_state.append(obs)
+            policy_input = self.wtw_state.history.reshape(2100)
+            self.wtw_state.previous_action = self.action.copy()
+        elif self.dreamwaq:
             if self.history is None:
                 self.history = np.repeat(obs[None], 6, axis=0)
             else:
@@ -206,6 +237,10 @@ class MjlabSim2Sim:
         if self.action.shape != (12,) or not np.isfinite(self.action).all():
             raise RuntimeError("Invalid actor output")
         target = self.default + self.config["action_scale"] * self.action
+        if self.wtw:
+            target = self.default + self.config["action_scale"] * np.clip(
+                self.action, -self.config["action_clip"], self.config["action_clip"]
+            )
         if self.dreamwaq:
             target = np.clip(target, self.joint_ranges[:, 0], self.joint_ranges[:, 1])
         self.illegal_contact = False
@@ -232,6 +267,9 @@ class MjlabSim2Sim:
                         mujoco.mj_contactForce(self.model, self.data, index, force)
                         self.illegal_contact |= bool(np.linalg.norm(force[:3]) > 1.0)
         mujoco.mj_forward(self.model, self.data)
+        if self.wtw:
+            self.wtw_state.finish_step(command, self.dt)
+            self.wtw_state.append(self.observation(command))
         if (
             not np.isfinite(self.data.qpos).all()
             or not np.isfinite(self.data.qvel).all()
@@ -239,7 +277,10 @@ class MjlabSim2Sim:
             raise RuntimeError("Nonfinite physics state")
         self.min_height = min(self.min_height, self.data.qpos[2])
         upright_cos = self.data.xmat[self.base_id].reshape(3, 3)[2, 2]
-        return obs, upright_cos < np.cos(np.deg2rad(70)) or self.illegal_contact
+        fallen = upright_cos < np.cos(np.deg2rad(70)) or self.illegal_contact
+        if self.wtw:
+            fallen = self.data.qpos[2] < .12 or upright_cos < .5
+        return obs, fallen
 
 
 def main():
@@ -255,8 +296,23 @@ def main():
         help="Fixed command; disables keyboard",
     )
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--policy", type=Path, help="Override exported policy.pt path")
+    parser.add_argument("--gait", choices=("trot", "pace", "bound", "pronk"))
+    parser.add_argument("--switches", action="store_true", help="WTW: switch gait every 5 seconds")
+    for name in ("frequency", "height", "swing-height", "pitch", "roll", "width", "length", "duty"):
+        parser.add_argument(f"--{name}", type=float, help="WTW command override")
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config_file).read_text())
+    if args.policy:
+        config["policy_path"] = str(args.policy.resolve())
+    wtw_options = ("gait", "frequency", "height", "swing_height", "pitch", "roll", "width", "length", "duty")
+    if args.switches or any(getattr(args, key) is not None for key in wtw_options):
+        if config.get("policy_type") != "wtw":
+            parser.error("gait/body command options require WTW mode")
+        settings = config.setdefault("wtw", {})
+        for key in wtw_options:
+            if getattr(args, key) is not None:
+                settings["duration" if key == "duty" else key] = getattr(args, key)
     duration = (
         args.duration if args.duration is not None else config["simulation_duration"]
     )
@@ -268,11 +324,16 @@ def main():
     command = np.array(
         args.command if args.command is not None else config["cmd_init"], dtype=float
     )
-    if not args.headless and args.command is None:
+    if sim.wtw:
+        command = sim.wtw_state.command(command)
+    if not args.headless and args.command is None and not args.switches:
         os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
         from keyboard_controller import KeyboardController
 
-        keyboard = KeyboardController(**config.get("keyboard", {}))
+        keyboard = KeyboardController(
+            **config.get("keyboard", {}),
+            **({"wtw_commands": command.tolist()} if sim.wtw else {}),
+        )
     reason = "duration"
 
     def run(viewer=None):
@@ -283,6 +344,10 @@ def main():
             start = time.monotonic()
             if keyboard:
                 command = keyboard.read()
+            if args.switches:
+                from wtw_commands import GAITS
+
+                command[5:8] = tuple(GAITS.values())[min(int((sim.data.time + 1e-8) / 5), 3)]
             _, fallen = sim.advance(command)
             if viewer is not None:
                 viewer.cam.lookat[:] = sim.data.xpos[sim.base_id]
@@ -309,11 +374,9 @@ def main():
         reason = "interrupted"
     finally:
         if keyboard:
-            keyboard.p.terminate()
-            keyboard.p.join(timeout=2)
-            keyboard.q.close()
+            keyboard.close()
         report = {
-            "task": "DreamWaQ-Flat-LittleWhiteV3"
+            "task": "WTW-LittleWhiteV3" if sim.wtw else "DreamWaQ-LittleWhiteV3"
             if sim.dreamwaq
             else "Mjlab-Velocity-Flat-LittleWhiteV3",
             "policy": config["policy_path"],
@@ -324,9 +387,19 @@ def main():
             "displacement_m": (sim.data.qpos[:3] - sim.initial_position).tolist(),
             "min_base_height_m": float(sim.min_height),
             "max_abs_torque_nm": sim.max_torque,
+            "mujoco_version": mujoco.__version__,
+            "torch_version": torch.__version__,
         }
+        if sim.wtw:
+            report.update(
+                command_names=sim.wtw_state.metadata["command_names"],
+                selected_iteration=sim.wtw_state.metadata["iteration"],
+                policy_sha256=sim.wtw_state.metadata["policy_sha256"],
+                observation_dim=70, history_length=30,
+                final_phase=float(sim.wtw_state.phase.item()),
+            )
         report_path = args.report or ROOT / "output" / (
-            "dreamwaq_report.json" if sim.dreamwaq else "mjlab_report.json"
+            "wtw_report.json" if sim.wtw else "dreamwaq_report.json" if sim.dreamwaq else "mjlab_report.json"
         )
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2) + "\n")
