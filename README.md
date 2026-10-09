@@ -1,126 +1,116 @@
-# Little White v3：standalone MuJoCo sim2sim
+# Little White v3 · MuJoCo sim2sim
 
-在 MuJoCo 中播放小白 v3 的 **WTW、DreamWaQ 與 MJLab** TorchScript 策略，提供鍵盤控制與固定命令，場景由各設定的 XML 載入。推論只需本專案、模型與匯出權重，無需 mjlab、Isaac Gym 或相鄰訓練專案。
+在 standalone MuJoCo 中播放小白 v3 的 WTW、DreamWaQ 或 MJLab 策略，支援鍵盤控制、固定命令與無視窗模擬。
+
+模型、推論程式與控制設定都在本專案，不需要 mjlab、Isaac Gym 或相鄰訓練專案。策略權重須另外取得。
 
 ## 安裝
 
-本機驗證環境：Python 3.12、MuJoCo 3.2.7、CPU PyTorch 2.14.1。版本列於 `requirements.txt`；以下使用 uv 建立環境：
+使用 Python 3.12 與 `uv`，在專案根目錄執行：
 
 ```bash
-cd sim2sim_mujoco
 uv venv --python 3.12
 uv pip install --python .venv/bin/python -r requirements.txt --torch-backend cpu
 ```
 
-已有本機 `.venv` 可直接使用。Linux GUI 需要可用桌面；macOS native viewer 請將播放指令的 `.venv/bin/python` 換成 `.venv/bin/mjpython`。無視窗執行使用 `--headless`。
+互動式播放需要圖形桌面。macOS 的 native viewer 使用 `.venv/bin/mjpython`；無視窗模擬使用 `--headless`。
 
-## 權重與 Git
+## 策略權重
 
-Git 保留程式、設定、XML／mesh、metadata 及上游授權；`.venv/`、權重、測試、`docs/`、影片與模擬輸出由 `.gitignore` 排除。**新 clone 必須另外取得 policy.pt**，放入下列路徑；WTW／DreamWaQ 權重必須與相同 export 的 `metadata.json` 配對。
+Git 不包含策略 export。將自行匯出的權重放到 `policies/`，或用 `--policy` 指定檔案。WTW 與 DreamWaQ 的 `policy.pt` 必須搭配同一次 export 的 `metadata.json`，放在同一資料夾。
 
-| 設定檔（皆在 `config/`） | 權重路徑 | 用途 |
+| 設定檔 | 預設策略路徑 | 用途 |
 | --- | --- | --- |
-| `little_white_v3_wtw.yaml` | `pre_train_mjlab/wtw_seed0_best/policy.pt` | WTW 預設最佳策略，update 5500 |
-| 同上，使用 `--policy` 替換 | `pre_train_mjlab/wtw_seed1_best/policy.pt` | WTW seed 1，update 4000 |
-| 同上，使用 `--policy` 替換 | `pre_train_mjlab/wtw_seed2_best/policy.pt` | WTW seed 2，update 2000 |
-| `little_white_v3_dreamwaq.yaml` | `pre_train_mjlab/dreamwaq_rough_best/policy.pt` | DreamWaQ 混合地形最佳策略 |
-| `little_white_v3_mjlab.yaml` | `pre_train_mjlab/blind_stairs_19998/policy.pt` | 原有 MJLab 策略 |
+| `config/little_white_v3_wtw_original.yaml` | `policies/wtw/policy.pt` | WTW，原始小白模型 |
+| `config/little_white_v3_wtw.yaml` | `policies/wtw/policy.pt` | WTW，訓練轉換模型 |
+| `config/little_white_v3_wtw_extended.yaml` | `policies/wtw_extended/policy.pt` | WTW，擴展速度與身高控制 |
+| `config/little_white_v3_dreamwaq.yaml` | `policies/dreamwaq/policy.pt` | DreamWaQ |
+| `config/little_white_v3_mjlab.yaml` | `policies/mjlab/policy.pt` | MJLab |
 
-本機上述五個權重均保留原位置，可直接播放。先前整理時的權重、舊輸出與測試已備份至 `../sim2sim_mujoco_artifacts/20261007_cleanup/`；備份的 SHA-256 已核對。
-
-在同一工作站還原權重的範例：
-
-```bash
-cp ../sim2sim_mujoco_artifacts/20261007_cleanup/pre_train_mjlab/wtw_seed0_best/policy.pt \
-  pre_train_mjlab/wtw_seed0_best/policy.pt
-```
-
-此歸檔路徑僅適用本機，不是執行依賴。其他機器請另外傳輸完整 export。原先已提交的權重已從 Git 索引移除，既有提交歷史仍保留它們。
+不同策略的觀測與控制契約不同，請搭配對應設定及 metadata。啟動時會檢查 WTW 策略／模型 hash 與控制參數。
 
 ## WTW 播放
 
-預設 seed 0，播放 300 秒，顯示棋盤格地面與鍵盤視窗：
+使用原始小白模型與鍵盤控制：
 
 ```bash
-MUJOCO_GL=glfw .venv/bin/python mujoco_mjlab.py config/little_white_v3_wtw.yaml
+MUJOCO_GL=glfw .venv/bin/python mujoco_mjlab.py \
+  config/little_white_v3_wtw_original.yaml
+
+# 指定自己的 export
+MUJOCO_GL=glfw .venv/bin/python mujoco_mjlab.py \
+  config/little_white_v3_wtw_original.yaml --policy policies/my_policy/policy.pt
 ```
 
-點選 **WTW Keyboard Control** 視窗操作。放開移動鍵後速度逐漸歸零，步態及身體參數保持最後設定。
+點選鍵盤控制視窗後操作：
 
-| 按鍵 | 命令／範圍 |
+| 按鍵 | 控制 |
 | --- | --- |
-| W / S | 前進／後退，±0.3 m/s |
-| A / D | 左／右側移，±0.15 m/s |
-| Q / E | 左／右轉，±0.5 rad/s |
-| 1 / 2 / 3 / 4 | trot（對角）／pace（同側）／bound（前後腳對）／pronk（四腳同步） |
-| R / F | 增加／減少步頻，1.8–3.2 Hz |
-| T / G | 增加／減少身高偏移，±0.04 m |
-| Y / H | 增加／減少抬腳高度，0.03–0.09 m |
-| U / J | 增加／減少 pitch，±0.15 rad |
-| I / K | 增加／減少 roll，±0.15 rad |
-| O / L | 增加／減少站距寬，nominal ±0.025 m |
-| P / ; | 增加／減少站距長，nominal ±0.025 m |
-| ] / [ | 增加／減少 duty factor，0.4–0.6 |
+| W / S | 前進／後退 |
+| A / D | 左／右側移 |
+| Q / E | 左／右轉 |
+| 1 / 2 / 3 / 4 | trot／pace／bound／pronk |
+| R / F | 增加／降低步頻 |
+| T / G | 增加／降低身高偏移 |
+| Y / H | 增加／降低抬腳高度 |
+| U / J、I / K | pitch、roll |
+| O / L、P / ; | 站距寬、長 |
+| ] / [ | stance duty factor |
 | 0 | 恢復設定檔的步態與身體命令 |
-| Space | 移動命令歸零，依 smoothing 逐漸停下 |
-| Esc | 關閉鍵盤視窗，速度逐漸歸零 |
+| Space | 移動命令歸零 |
 
-切換步態或重設命令保留連續 phase 與 history。關閉 MuJoCo 視窗或按 Ctrl+C 結束模擬。
+移動鍵放開後速度逐漸歸零，步態與身體命令保留；關閉 MuJoCo 視窗或按 Ctrl+C 結束。
 
-固定命令、四步態切換、替換 seed：
+固定命令或無視窗執行：
 
 ```bash
-.venv/bin/python mujoco_mjlab.py config/little_white_v3_wtw.yaml \
-  --gait pace --frequency 2.5 --command 0.3 0 0 --duration 60
+.venv/bin/python mujoco_mjlab.py config/little_white_v3_wtw_original.yaml \
+  --gait trot --command 0.3 0 0 --height 0.02 --swing-height 0.06 --duration 60
 
-.venv/bin/python mujoco_mjlab.py config/little_white_v3_wtw.yaml \
-  --headless --switches --command 0.3 0 0 --duration 20 \
-  --report output/wtw_switches.json
-
-.venv/bin/python mujoco_mjlab.py config/little_white_v3_wtw.yaml \
-  --policy pre_train_mjlab/wtw_seed1_best/policy.pt
+.venv/bin/python mujoco_mjlab.py config/little_white_v3_wtw_original.yaml \
+  --headless --command 0.3 0 0 --duration 20 --report output/result.json
 ```
 
-另支援 `--height`、`--swing-height`、`--pitch`、`--roll`、`--width`、`--length`、`--duty`。`--command VX VY YAW_RATE` 使用機身 yaw 座標，單位 m/s、m/s、rad/s；正 vy 向左、正 yaw-rate 左轉。固定命令與自動切換會停用鍵盤。報告預設 `output/wtw_report.json`。
+`--command VX VY YAW` 的速度單位為 m/s、yaw rate 為 rad/s；身高與抬腳高度為 m。固定命令及 `--switches` 自動步態切換會停用鍵盤。其他選項可用 `--help` 查看。
 
-WTW student 輸入 `[1,2100]`：70 維觀測、30 幀 history，由舊到新排列，初始零 padding 加當前觀測。history → adaptation → actor 已內嵌，推論不讀 privileged 值。關節順序 FR／FL／RL／RR，每腿 hip／thigh／calf。
+## 模型與控制範圍
 
-控制：physics dt 0.005 s、decimation 4（50 Hz），nominal `[0,0.95,-1.7]`、Kp 20、Kd 0.5、action scale 0.25。action 裁切 ±4，每個 physics step 重算 PD 並裁切扭矩 ±27 Nm。啟動時核對策略 SHA-256、觀測／控制／步態版本、資產轉換版本及模型 hash。
+WTW 可使用 `--model-profile original` 或 `training`。`original` 保留固定版本原始小白模型的物理設定；`training` 使用 WTW 訓練轉換模型。兩者沿用相同策略控制契約，physics dt 為 0.005 s、控制頻率為 50 Hz。
 
-WTW 固定模型位於 `assets/little_white_v3_wtw/`，來源與 hash 見 `manifest.json`，授權見 `third_party/wtw/`。`show_grid: true` 在模型驗證後於記憶體加入棋盤格材質，只改視覺。模型原檔與接觸參數保持相同；`false` 使用訓練場景的純色地面。
+`show_grid` 控制訓練模型的地面格線顯示，不更改物理參數。
 
-三個 WTW seed 各訓練至 10,000 updates，使用最佳 checkpoint 匯出。訓練專案已完成平地四步態及切換驗收；抬腳命令的實際響應偏弱，±5° 坡度速度追蹤未達標，adaptation 尚未證明有整體收益。本專案 MuJoCo 3.2.7 的單一初始狀態播放檢查，不等同訓練專案 MuJoCo 3.11.0 的完整 20-seed 評估。
+擴展設定提供前進 0.6、後退 0.3、側移 0.25 m/s、yaw 0.75 rad/s，以及身高偏移 −0.08 到 +0.04 m，需搭配已訓練及驗證該範圍的策略：
+
+```bash
+MUJOCO_GL=glfw .venv/bin/python mujoco_mjlab.py \
+  config/little_white_v3_wtw_extended.yaml --policy policies/my_policy/policy.pt
+```
+
+鍵盤速度在 `keyboard` 設定；倒退速度可用 `backward_scale` 個別指定，身高範圍可用 `wtw.control_limits.height: [MIN, MAX]` 指定。
 
 ## DreamWaQ 與 MJLab
 
 ```bash
-# DreamWaQ 混合地形策略，鍵盤控制。
 .venv/bin/python mujoco_mjlab.py config/little_white_v3_dreamwaq.yaml
-
-# 原有 MJLab 策略。
 .venv/bin/python mujoco_mjlab.py config/little_white_v3_mjlab.yaml
-
-# 無視窗平地檢查。
-.venv/bin/python mujoco_mjlab.py config/little_white_v3_dreamwaq.yaml \
-  --headless --command 0.3 0 0 --duration 20
 ```
 
-兩者使用 W/S 前後、A/D 側移、Q/E 轉向；DreamWaQ rough 的速度範圍為 ±0.6／±0.4 m/s、yaw ±0.8 rad/s。DreamWaQ 使用六幀 45 維觀測，MJLab 使用單幀 48 維觀測。策略格式及控制設定不可混用。
+使用 W/S、A/D、Q/E 控制速度，也支援 `--policy`、`--command` 與 `--headless`。DreamWaQ 使用六幀觀測歷史，MJLab 使用單幀觀測；兩者的策略格式不可混用。
 
-DreamWaQ 使用 `assets/little_white_v3/scene.xml`，載入時套用訓練接觸設定；WTW 使用自己的固定平地模型。報告記錄模擬時長、停止原因、位移、最低基座高度與最大扭矩。
-
-## 檔案結構
+## 檔案與版本管理
 
 ```text
-mujoco_mjlab.py         模擬、PD、策略推論與報告
-keyboard_controller.py 鍵盤視窗
+mujoco_mjlab.py         模擬、策略推論與 PD 控制
+keyboard_controller.py 鍵盤控制
 wtw_commands.py        WTW 命令與步態
-wtw_runtime.py         WTW 觀測、history、模型／版本驗證
-config/                三個播放設定
-assets/                兩套模型與相對路徑 mesh
-pre_train_mjlab/        metadata、來源說明與本機權重
-third_party/           上游授權與來源
-requirements.txt       已驗證的直接依賴版本
+wtw_runtime.py         WTW 觀測、history 與契約驗證
+config/                播放設定
+assets/                原始／訓練模型、mesh 與來源 hash
+policies/              本機策略 export（不納入 Git）
+third_party/           上游授權與來源說明
+requirements.txt       推論依賴版本
 ```
 
-精簡 repo 不包含測試與舊輸出。先前的回歸測試已歸檔；目前保留的三種策略會以載入、推論與物理步進檢查驗證。
+Git 保留程式、設定、模型與上游授權；權重及 metadata、虛擬環境、模擬輸出、影片與快取由 `.gitignore` 排除。換機時另外傳送完整策略 export。
+
+模型與 WTW 移植來源及授權見 [third_party/wtw/NOTICE.md](third_party/wtw/NOTICE.md)。

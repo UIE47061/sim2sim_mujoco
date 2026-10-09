@@ -1,0 +1,93 @@
+# Extended WTW command targets; policy must be supplied with --policy.
+# Original physical model and PD unchanged. Higher speed/lower stance need policy validation.
+policy_type: wtw
+model_profile: original
+policy_path: policies/wtw_extended/policy.pt
+xml_path: assets/little_white_v3/scene.xml
+show_grid: true
+simulation_duration: 300.0
+simulation_dt: 0.005
+control_decimation: 4
+initial_height: 0.27765160965891567
+kps:
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+- 20
+kds:
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+- 0.5
+torque_limit: 27.0
+action_scale: 0.25
+action_clip: 4.0
+joint_order:
+- FR_hip_joint
+- FR_thigh_joint
+- FR_calf_joint
+- FL_hip_joint
+- FL_thigh_joint
+- FL_calf_joint
+- RL_hip_joint
+- RL_thigh_joint
+- RL_calf_joint
+- RR_hip_joint
+- RR_thigh_joint
+- RR_calf_joint
+default_angles:
+- 0
+- 0.95
+- -1.7
+- 0
+- 0.95
+- -1.7
+- 0
+- 0.95
+- -1.7
+- 0
+- 0.95
+- -1.7
+num_obs: 70
+history_length: 30
+num_actions: 12
+cmd_init:
+- 0.0
+- 0.0
+- 0.0
+wtw:
+  gait: trot
+  frequency: 2.5
+  height: 0.0
+  duration: 0.5
+  swing_height: 0.06
+  pitch: 0.0
+  roll: 0.0
+  width: 0.29290947850000004
+  length: 0.3564993139547585
+  control_limits:
+    height:
+    - -0.08
+    - 0.04
+keyboard:
+  vx_scale: 0.6
+  backward_scale: 0.3
+  vy_scale: 0.25
+  yaw_scale: 0.75
+  smooth: 0.2

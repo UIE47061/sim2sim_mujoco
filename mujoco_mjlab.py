@@ -33,7 +33,8 @@ class MjlabSim2Sim:
             spec = mujoco.MjSpec.from_file(str(ROOT / config["xml_path"]))
             self.apply_dreamwaq_contacts(spec)
             self.model = spec.compile()
-        elif self.wtw and config.get("show_grid", True):
+        elif (self.wtw and self.wtw_state.model_profile == "training"
+              and config.get("show_grid", True)):
             from wtw_runtime import apply_grid_visuals
 
             spec = mujoco.MjSpec.from_file(str(ROOT / config["xml_path"]))
@@ -94,6 +95,8 @@ class MjlabSim2Sim:
         )
         print(f"[INFO] {label}, action=12", flush=True)
         print("[INFO] policy -> actuator mapping:", self.mapping.tolist(), flush=True)
+        if self.wtw:
+            print(f"[INFO] WTW model profile: {self.wtw_state.model_profile}", flush=True)
 
     def apply_dreamwaq_contacts(self, spec):
         """Apply the training robot's contact profile to the shared scene.
@@ -297,12 +300,20 @@ def main():
     )
     parser.add_argument("--report", type=Path)
     parser.add_argument("--policy", type=Path, help="Override exported policy.pt path")
+    parser.add_argument("--model-profile", choices=("training", "original"),
+                        help="WTW: trained physics or unmodified upstream Little White model")
     parser.add_argument("--gait", choices=("trot", "pace", "bound", "pronk"))
     parser.add_argument("--switches", action="store_true", help="WTW: switch gait every 5 seconds")
     for name in ("frequency", "height", "swing-height", "pitch", "roll", "width", "length", "duty"):
         parser.add_argument(f"--{name}", type=float, help="WTW command override")
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config_file).read_text())
+    if args.model_profile:
+        if config.get("policy_type") != "wtw":
+            parser.error("model-profile requires WTW mode")
+        from wtw_runtime import select_model_profile
+
+        select_model_profile(config, args.model_profile)
     if args.policy:
         config["policy_path"] = str(args.policy.resolve())
     wtw_options = ("gait", "frequency", "height", "swing_height", "pitch", "roll", "width", "length", "duty")
@@ -332,7 +343,8 @@ def main():
 
         keyboard = KeyboardController(
             **config.get("keyboard", {}),
-            **({"wtw_commands": command.tolist()} if sim.wtw else {}),
+            **({"wtw_commands": command.tolist(),
+                "wtw_limits": config.get("wtw", {}).get("control_limits")} if sim.wtw else {}),
         )
     reason = "duration"
 
@@ -392,6 +404,8 @@ def main():
         }
         if sim.wtw:
             report.update(
+                model_profile=sim.wtw_state.model_profile,
+                model_manifest=sim.wtw_state.model_manifest,
                 command_names=sim.wtw_state.metadata["command_names"],
                 selected_iteration=sim.wtw_state.metadata["iteration"],
                 policy_sha256=sim.wtw_state.metadata["policy_sha256"],

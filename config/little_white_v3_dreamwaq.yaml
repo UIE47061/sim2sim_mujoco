@@ -1,6 +1,6 @@
-# DreamWaQ task v2, rough_round best at 9000 updates.
+# DreamWaQ actor: six-frame observation history.
 policy_type: dreamwaq
-policy_path: pre_train_mjlab/dreamwaq_rough_best/policy.pt
+policy_path: policies/dreamwaq/policy.pt
 xml_path: assets/little_white_v3/scene.xml
 simulation_duration: 60.0
 simulation_dt: 0.005

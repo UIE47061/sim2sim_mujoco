@@ -22,17 +22,28 @@ def publish_latest(queue, value):
             pass
 
 
-def pygame_worker(q, vx_scale, vy_scale, yaw_scale, wtw_commands=None):
+def pygame_worker(
+    q,
+    vx_scale,
+    vy_scale,
+    yaw_scale,
+    wtw_commands=None,
+    wtw_limits=None,
+    backward_scale=None,
+):
     import pygame
 
     pygame.init()
-    state = WTWCommandState(wtw_commands) if wtw_commands is not None else None
+    state = (
+        WTWCommandState(wtw_commands, wtw_limits) if wtw_commands is not None else None
+    )
     screen = pygame.display.set_mode((690, 590) if state else (480, 230))
     pygame.display.set_caption("WTW Keyboard Control" if state else "Keyboard Control")
     font = pygame.font.SysFont("Arial", 18)
     pygame.key.set_repeat(250, 100)
     clock = pygame.time.Clock()
     running = True
+    backward_scale = vx_scale if backward_scale is None else backward_scale
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -47,7 +58,7 @@ def pygame_worker(q, vx_scale, vy_scale, yaw_scale, wtw_commands=None):
             [
                 vx_scale
                 if keys[pygame.K_w]
-                else -vx_scale
+                else -backward_scale
                 if keys[pygame.K_s]
                 else 0.0,
                 vy_scale
@@ -104,14 +115,22 @@ def pygame_worker(q, vx_scale, vy_scale, yaw_scale, wtw_commands=None):
 
 class KeyboardController:
     def __init__(
-        self, vx_scale=1.0, vy_scale=1.0, yaw_scale=1.0, smooth=0.2, wtw_commands=None
+        self,
+        vx_scale=1.0,
+        vy_scale=1.0,
+        yaw_scale=1.0,
+        smooth=0.2,
+        wtw_commands=None,
+        wtw_limits=None,
+        backward_scale=None,
     ):
         if not 0 < smooth <= 1:
             raise ValueError("Keyboard smoothing must be in (0, 1]")
         self.vx_scale, self.vy_scale, self.yaw_scale = vx_scale, vy_scale, yaw_scale
+        self.backward_scale = vx_scale if backward_scale is None else backward_scale
         self.smooth = smooth
         self.command = (
-            WTWCommandState(wtw_commands).command
+            WTWCommandState(wtw_commands, wtw_limits).command
             if wtw_commands is not None
             else np.zeros(3, dtype=np.float32)
         )
@@ -121,7 +140,15 @@ class KeyboardController:
         self.p = context.Process(
             target=pygame_worker,
             daemon=True,
-            args=(self.q, vx_scale, vy_scale, yaw_scale, wtw_commands),
+            args=(
+                self.q,
+                vx_scale,
+                vy_scale,
+                yaw_scale,
+                wtw_commands,
+                wtw_limits,
+                self.backward_scale,
+            ),
         )
         self.p.start()
 

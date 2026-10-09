@@ -21,6 +21,10 @@ JOINTS = [
     for part in ("hip", "thigh", "calf")
 ]
 DEFAULT = [0.0, 0.95, -1.7] * 4
+MODEL_PATHS = {
+    "training": "assets/little_white_v3_wtw/scene.xml",
+    "original": "assets/little_white_v3/scene.xml",
+}
 FIELDS = [
     ["gravity", 3],
     ["commands", 15],
@@ -64,6 +68,55 @@ def apply_grid_visuals(spec):
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def select_model_profile(config, profile):
+    if profile not in MODEL_PATHS:
+        raise ValueError("WTW model_profile must be training or original")
+    config["model_profile"] = profile
+    config["xml_path"] = MODEL_PATHS[profile]
+
+
+def validate_model(config, root, metadata):
+    profile = config.get("model_profile", "training")
+    if profile not in MODEL_PATHS:
+        raise ValueError("WTW model_profile must be training or original")
+    assets = (root / config["xml_path"]).parent
+    if profile == "original":
+        if (root / config["xml_path"]).resolve() != (root / MODEL_PATHS[profile]).resolve():
+            raise ValueError("Original WTW profile requires the pinned upstream scene")
+        manifest = json.loads((assets / "source_manifest.json").read_text())
+        if manifest.get("model_profile") != "original":
+            raise ValueError("Invalid original-model manifest")
+        # Verify original XML/meshes against the source hashes recorded at export.
+        for name, digest in manifest["sha256"].items():
+            if name == "scene.xml":
+                if digest != "a23435a4d886fd457d31d8e86217d854b4d09b5f8a2ae430c2c0800081c78b2d":
+                    raise ValueError("Original scene does not match pinned csl_mujoco revision")
+            elif digest != metadata["assets"]["sha256"].get("upstream/" + name):
+                raise ValueError(f"Original model source mismatch: {name}")
+        required = {"little_white_v3.xml", "scene.xml"}
+        required.update(
+            name.removeprefix("upstream/")
+            for name in metadata["assets"]["sha256"]
+            if name.startswith("upstream/meshes/")
+        )
+        if set(manifest["sha256"]) != required:
+            raise ValueError("Original manifest must cover the robot, scene and all meshes")
+    else:
+        manifest = json.loads((assets / "manifest.json").read_text())
+        if manifest.get("transform_version") != 3 or manifest != metadata["assets"]:
+            raise ValueError("WTW model manifest/transform does not match policy")
+        if (root / config["xml_path"]).name != "scene.xml":
+            raise ValueError("WTW training profile requires scene.xml")
+    if manifest.get("revision") != "0ab74ef5d6048345db7a541316019100416b57d6":
+        raise ValueError("WTW requires the pinned Little White v3 source revision")
+    for name, digest in manifest["sha256"].items():
+        if Path(name).is_absolute() or ".." in Path(name).parts:
+            raise ValueError("Invalid WTW manifest path")
+        if sha(assets / name) != digest:
+            raise ValueError(f"WTW model SHA-256 mismatch: {name}")
+    return profile, manifest
 
 
 def validate_export(config, root):
@@ -119,25 +172,13 @@ def validate_export(config, root):
             raise ValueError(f"WTW config must match training: {key}")
     if config["joint_order"] != JOINTS:
         raise ValueError("WTW requires FR/FL/RL/RR policy joint order")
-    assets = (root / config["xml_path"]).parent
-    manifest = json.loads((assets / "manifest.json").read_text())
-    if (
-        manifest.get("revision") != "0ab74ef5d6048345db7a541316019100416b57d6"
-        or manifest.get("transform_version") != 3
-    ):
-        raise ValueError(
-            "WTW requires the pinned Little White v3 source and transform v3"
-        )
-    if (root / config["xml_path"]).name != "scene.xml" or manifest != metadata[
-        "assets"
-    ]:
-        raise ValueError("WTW model manifest/transform does not match policy")
-    for name, digest in manifest["sha256"].items():
-        if Path(name).is_absolute() or ".." in Path(name).parts:
-            raise ValueError("Invalid WTW manifest path")
-        if sha(assets / name) != digest:
-            raise ValueError(f"WTW model SHA-256 mismatch: {name}")
-    geometry = json.loads((assets / "geometry.json").read_text())
+    validate_model(config, root, metadata)
+    # Both profiles retain identical geometry; command dimensions are an actor contract.
+    training_assets = (root / MODEL_PATHS["training"]).parent
+    geometry_path = training_assets / "geometry.json"
+    if sha(geometry_path) != metadata["assets"]["sha256"]["geometry.json"]:
+        raise ValueError("WTW nominal geometry SHA-256 mismatch")
+    geometry = json.loads(geometry_path.read_text())
     if not np.isclose(
         config["initial_height"], geometry["initial_height"], rtol=0, atol=1e-8
     ):
@@ -148,6 +189,10 @@ def validate_export(config, root):
 class WTWState:
     def __init__(self, config, root):
         self.metadata, self.geometry = validate_export(config, root)
+        self.model_profile = config.get("model_profile", "training")
+        assets = (root / config["xml_path"]).parent
+        manifest_name = "source_manifest.json" if self.model_profile == "original" else "manifest.json"
+        self.model_manifest = json.loads((assets / manifest_name).read_text())
         self.initial_command = initial_command(config, self.geometry)
         self.phase = torch.zeros(1)
         self.previous_action = np.zeros(12, dtype=np.float32)
@@ -172,6 +217,19 @@ class WTWState:
             raw < duty, raw * 0.5 / duty, 0.5 + (raw - duty) * 0.5 / (1 - duty)
         )
         return torch.sin(2 * torch.pi * warped)
+
+    def contact_targets(self, command):
+        c = torch.from_numpy(command)
+        p, o, b = c[5], c[6], c[7]
+        raw = torch.remainder(self.phase[:, None] + torch.stack((o, p + o + b, b, p)), 1.0)
+        duty = c[8].clamp(0.1, 0.9)
+        warped = torch.where(raw < duty, raw * 0.5 / duty, 0.5 + (raw - duty) * 0.5 / (1 - duty))
+
+        def cdf(x):
+            return 0.5 * (1 + torch.erf(x / (0.07 * 2**0.5)))
+
+        return (cdf(warped) * (1 - cdf(warped - 0.5))
+                + cdf(warped - 1) * (1 - cdf(warped - 1.5)))[0].numpy()
 
     def observation(self, rotation, q, dq, action, command):
         # Exactly the trained 70D order; no measured linear/angular velocity or privilege.

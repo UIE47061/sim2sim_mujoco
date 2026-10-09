@@ -1,9 +1,9 @@
-# WTW student with the training model and control contract.
+# Original csl_mujoco physics; WTW observation/PD contract is retained.
 # metadata.json validates observation/control versions, policy and model hashes.
 policy_type: wtw
-model_profile: training
+model_profile: original
 policy_path: policies/wtw/policy.pt
-xml_path: assets/little_white_v3_wtw/scene.xml
+xml_path: assets/little_white_v3/scene.xml
 show_grid: true  # Viewer texture only; preserves the hashed model and contact parameters.
 simulation_duration: 300.0
 simulation_dt: 0.005

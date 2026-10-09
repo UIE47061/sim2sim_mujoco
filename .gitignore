@@ -33,7 +33,9 @@ videos/
 MUJOCO_LOG.TXT
 *.mp4
 
-# Local policy weights; keep metadata and provenance in Git
+# Local exports: policy, paired metadata and machine-specific provenance
+/pre_train_mjlab/
+/policies/
 *.pt
 *.pth
 *.ckpt

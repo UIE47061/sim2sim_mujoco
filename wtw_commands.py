@@ -79,19 +79,30 @@ def initial_command(config, geometry):
 class WTWCommandState:
     """Persistent gait/body settings; held movement keys are handled separately."""
 
-    def __init__(self, command):
+    def __init__(self, command, control_limits=None):
         self.defaults = validate_command(command).copy()
         self.command = self.defaults.copy()
         self.gait = next(
             (k for k, v in GAITS.items() if np.allclose(self.command[5:8], v)), "custom"
         )
         width, length = map(float, self.defaults[12:14])
-        # Body/frequency ranges match the trained command curriculum.
+        # Expanded command ranges are opt-in and do not alter legacy configs.
+        limits = control_limits or {}
+        if set(limits) - {"height"}:
+            raise ValueError("Unsupported WTW keyboard control limit")
+        height_limits = np.asarray(limits.get("height", [-0.04, 0.04]), dtype=float)
+        if (
+            height_limits.shape != (2,)
+            or not np.isfinite(height_limits).all()
+            or height_limits[0] > height_limits[1]
+        ):
+            raise ValueError("WTW height limits require finite MIN <= MAX")
+        height_low, height_high = height_limits
         self.adjustments = {
             "r": (4, 0.1, 1.8, 3.2),
             "f": (4, -0.1, 1.8, 3.2),
-            "t": (3, 0.01, -0.04, 0.04),
-            "g": (3, -0.01, -0.04, 0.04),
+            "t": (3, 0.01, height_low, height_high),
+            "g": (3, -0.01, height_low, height_high),
             "y": (9, 0.01, 0.03, 0.09),
             "h": (9, -0.01, 0.03, 0.09),
             "u": (10, 0.025, -0.15, 0.15),
